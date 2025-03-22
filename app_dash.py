@@ -239,8 +239,6 @@ def start_twap(n_clicks, selected_exchange, symbol, side, total_size, total_run_
         "price_limit": price_limit
     })
 
-    return "TWAP job submitted successfully."
-
 @app.callback(
     Output("active-jobs-table", "data"),
     Input("orders-interval", "n_intervals")
