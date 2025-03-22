@@ -1,10 +1,12 @@
 import threading
 import time
-from datetime import datetime, timedelta
-import logging
 import uuid
 
-logging.basicConfig(level=logging.INFO)
+from datetime import datetime, timedelta
+from twap_engine.logger import setup_logger
+from .db import log_scheduled_job
+
+logger = setup_logger("scheduler")
 
 class ScheduledTWAPTask:
     def __init__(self, task_id, task_data):
@@ -32,23 +34,21 @@ class OrderScheduler:
         self._id_lock = threading.Lock()
 
     def start(self):
-        logging.info("[Scheduler] OrderScheduler thread running...")
+        logger.info("[Scheduler] OrderScheduler thread running...")
         self._thread.start()
 
     def stop(self):
         self._shutdown.set()
         self._thread.join()
-        logging.info("[Scheduler] OrderScheduler stopped.")
+        logger.info("[Scheduler] OrderScheduler stopped.")
 
     def schedule_order(self, config):
         with self._id_lock:
             task_id = str(uuid.uuid4())
             task = ScheduledTWAPTask(task_id, config)
             self._tasks.append(task)
-            logging.info(f"[Scheduler] Scheduled {task_id}: {config}")
+            logger.info(f"[Scheduler] Scheduled {task_id}: {config}")
 
-            # Log the scheduled job to the database
-            from .db import log_scheduled_job
             job_details = {
                 "job_id": task_id,
                 "exchange": config["exchange"],
@@ -70,7 +70,7 @@ class OrderScheduler:
             before = len(self._tasks)
             self._tasks = [t for t in self._tasks if t.id != task_id]
             after = len(self._tasks)
-            logging.info(f"[Scheduler] Cancelled {task_id}. Queue size: {before} → {after}")
+            logger.info(f"[Scheduler] Cancelled {task_id}. Queue size: {before} → {after}")
 
     def _run(self):
         while not self._shutdown.is_set():
@@ -85,14 +85,14 @@ class OrderScheduler:
                             payload["executed"] = task.completed
                             payload["next_exec"] = task.next_trigger.isoformat()
 
-                            logging.info(f"[Scheduler] Dispatching {task.id} (step {task.completed}/{task.details['num_trades']})")
+                            logger.info(f"[Scheduler] Dispatching {task.id} (step {task.completed}/{task.details['num_trades']})")
                             self.queue.put(payload)
 
                             if done:
                                 self._tasks.remove(task)
-                                logging.info(f"[Scheduler] Task {task.id} completed.")
+                                logger.info(f"[Scheduler] Task {task.id} completed.")
             except Exception as err:
-                logging.error(f"[Scheduler] Error: {err}")
+                logger.error(f"[Scheduler] Error: {err}")
 
             time.sleep(self.interval)
 

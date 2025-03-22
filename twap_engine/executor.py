@@ -1,12 +1,13 @@
 import threading
 import queue
-import logging
 import ccxt
 import datetime
 import time
-from .db import log_submitted_order
 
-logging.basicConfig(level=logging.INFO)
+from .db import log_submitted_order
+from twap_engine.logger import setup_logger
+
+logger = setup_logger("executor")
 
 class OrderExecutor(threading.Thread):
     def __init__(self, order_queue, order_scheduler):
@@ -16,7 +17,7 @@ class OrderExecutor(threading.Thread):
         self._stop_event = threading.Event()
 
     def run(self):
-        logging.info("[Executor] OrderExecutor thread started.")
+        logger.info("[Executor] OrderExecutor thread started.")
         while not self._stop_event.is_set():
             try:
                 task = self.order_queue.get(timeout=1)
@@ -25,11 +26,11 @@ class OrderExecutor(threading.Thread):
             except queue.Empty:
                 continue
             except Exception as e:
-                logging.error(f"[Executor] Error in processing loop: {e}")
+                logger.error(f"[Executor] Error in processing loop: {e}")
                 order_id = task.get("id")
                 if order_id:
                     self.order_scheduler.cancel_order(order_id)
-                    logging.info(f"[Executor] Order {order_id} cancelled due to error.")
+                    logger.info(f"[Executor] Order {order_id} cancelled due to error.")
 
     def submit_order(self, task):
         exchange_name = task["exchange"]
@@ -43,38 +44,33 @@ class OrderExecutor(threading.Thread):
         price_cap = task.get("price_limit")
 
         try:
-            # Initialize exchange instance using ccxt
             exchange_class = getattr(ccxt, exchange_name.lower())
             credentials = {"apiKey": api_key, "secret": api_secret}
             if password:
                 credentials["password"] = password
 
             exchange = exchange_class(credentials)
-            if test_mode and exchange_name.lower() == "bybit":
+            if test_mode and hasattr(exchange, "set_sandbox_mode"):
                 exchange.set_sandbox_mode(True)
 
-            # Get current market price
             ticker = exchange.fetch_ticker(symbol)
             current_market_price = float(ticker["last"])
-            logging.info(f"[Executor] Current price for {symbol}: {current_market_price}")
+            logger.info(f"[Executor] Current price for {symbol}: {current_market_price}")
 
-            # Check price cap conditions if provided
             if price_cap is not None:
                 if side == "buy" and current_market_price > price_cap:
                     raise Exception(f"Buy limit exceeded: {current_market_price} > {price_cap}")
                 if side == "sell" and current_market_price < price_cap:
                     raise Exception(f"Sell limit missed: {current_market_price} < {price_cap}")
 
-            # Submit order via ccxt
             if side == "buy":
                 credentials["createMarketBuyOrderRequiresPrice"] = True
                 order_response = exchange.create_order(symbol, 'market', side, chunk_size, current_market_price, credentials)
             else:
                 order_response = exchange.create_order(symbol, 'market', side, chunk_size, None, credentials)
 
-            logging.info(f"[Executor] Order response: {order_response}")
+            logger.info(f"[Executor] Order response: {order_response}")
 
-            # Log submitted order along with the exchange order ID for later tracking.
             step = task.get("executed", 0)
             submitted_log = {
                 "timestamp": datetime.datetime.now().isoformat(),
@@ -92,14 +88,12 @@ class OrderExecutor(threading.Thread):
             log_submitted_order(submitted_log)
 
         except Exception as e:
-            logging.error(f"[Executor] Order error: {e}")
+            logger.error(f"[Executor] Order error: {e}")
             order_id = task.get("id")
             if order_id:
                 self.order_scheduler.cancel_order(order_id)
-                logging.info(f"[Executor] Order {order_id} cancelled due to error.")
+                logger.info(f"[Executor] Order {order_id} cancelled due to error.")
 
     def stop(self):
         self._stop_event.set()
-        logging.info("[Executor] OrderExecutor thread stopped.")
-
-
+        logger.info("[Executor] OrderExecutor thread stopped.")
