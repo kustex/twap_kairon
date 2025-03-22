@@ -176,3 +176,4 @@ exchanges.json
 twap_jobs.db
 secret.key
 exchanges.secure
+logs

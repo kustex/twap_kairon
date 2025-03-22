@@ -15,9 +15,6 @@ from twap_engine.encryption_utils import encrypt_data, decrypt_data, generate_ke
 # ------------------- Initialization -------------------
 tz = pytz.timezone('Europe/Paris')
 EXCHANGES_FILE = "exchanges.secure"
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
 
 # Ensure key is generated on first run
 generate_key()
