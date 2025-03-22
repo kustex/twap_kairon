@@ -3,32 +3,35 @@ from dash import dcc, html, dash_table, Input, Output, State
 import dash_bootstrap_components as dbc
 import json
 import os
-import pandas as pd
 import pytz
 
 from twap_engine import launch_system, order_scheduler as scheduler
-from twap_engine.db import get_submitted_orders
-
+from twap_engine.db import (
+    get_submitted_orders,
+    get_scheduled_jobs
+)
+from twap_engine.encryption_utils import encrypt_data, decrypt_data, generate_key
 
 # ------------------- Initialization -------------------
-launch_system()
-
 tz = pytz.timezone('Europe/Paris')
-EXCHANGES_FILE = "exchanges.json"
+EXCHANGES_FILE = "exchanges.secure"
 DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
+# Ensure key is generated on first run
+generate_key()
+
 # ------------------- Helper Functions -------------------
 def load_exchanges():
     if os.path.exists(EXCHANGES_FILE):
-        with open(EXCHANGES_FILE, "r") as f:
-            return json.load(f)
+        with open(EXCHANGES_FILE, "rb") as f:
+            return decrypt_data(f.read())
     return {}
 
 def save_exchanges(exchanges):
-    with open(EXCHANGES_FILE, "w") as f:
-        json.dump(exchanges, f, indent=4)
+    with open(EXCHANGES_FILE, "wb") as f:
+        f.write(encrypt_data(exchanges))
 
 # ------------------- Dash App Setup -------------------
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -86,7 +89,7 @@ app.layout = dbc.Container([
         ], width=4),
 
         dbc.Col([
-            html.H4("Submitted Trades", className="mb-3"),
+            html.H4("Submitted Orders", className="mb-3"),
             dash_table.DataTable(
                 id="submitted-orders-table",
                 columns=[
@@ -100,6 +103,27 @@ app.layout = dbc.Container([
                     {"name": "Side", "id": "side"},
                     {"name": "Order Type", "id": "order_type"},
                     {"name": "Job ID", "id": "job_id"}
+                ],
+                data=[],
+                style_table={"overflowX": "auto"},
+                style_cell={"textAlign": "center"},
+                page_size=10
+            ),
+            html.Hr(),
+            html.H4("Scheduled TWAP Jobs", className="mb-3"),
+            dash_table.DataTable(
+                id="scheduled-jobs-table",
+                columns=[
+                    {"name": "Job ID", "id": "job_id"},
+                    {"name": "Exchange", "id": "exchange"},
+                    {"name": "Symbol", "id": "symbol"},
+                    {"name": "Side", "id": "side"},
+                    {"name": "Total Size", "id": "total_size"},
+                    {"name": "Number of Trades", "id": "num_trades"},
+                    {"name": "Delay (seconds)", "id": "delay_seconds"},
+                    {"name": "Testnet", "id": "testnet"},
+                    {"name": "Price Limit", "id": "price_limit"},
+                    {"name": "Timestamp", "id": "timestamp"}
                 ],
                 data=[],
                 style_table={"overflowX": "auto"},
@@ -129,6 +153,7 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 # ------------------- Callbacks -------------------
+
 @app.callback(
     Output("sidebar", "is_open"),
     Input("open-sidebar", "n_clicks"),
@@ -159,7 +184,7 @@ def save_exchange(n_clicks, name, api_key, api_secret, password, testnet):
         if password:
             params["password"] = password
         exchange = exchange_class(params)
-        if testnet and name.lower() == "bybit":
+        if testnet and hasattr(exchange, "set_sandbox_mode"):
             exchange.set_sandbox_mode(True)
         exchange.fetch_ticker("BTC/USDT")
     except Exception as e:
@@ -236,5 +261,14 @@ def update_submitted_orders(n):
             order["trade_number"] = f"{tn}/{nt}"
     return orders
 
+@app.callback(
+    Output("scheduled-jobs-table", "data"),
+    Input("orders-interval", "n_intervals")
+)
+def update_scheduled_jobs(n):
+    return get_scheduled_jobs()
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    from twap_engine import launch_system
+    launch_system()
+    app.run(debug=True, use_reloader=False)

@@ -46,6 +46,23 @@ class OrderScheduler:
             task = ScheduledTWAPTask(task_id, config)
             self._tasks.append(task)
             logging.info(f"[Scheduler] Scheduled {task_id}: {config}")
+
+            # Log the scheduled job to the database
+            from .db import log_scheduled_job
+            job_details = {
+                "job_id": task_id,
+                "exchange": config["exchange"],
+                "symbol": config["symbol"],
+                "side": config["side"],
+                "total_size": config["total_size"],
+                "num_trades": config["num_trades"],
+                "delay_seconds": config["delay_seconds"],
+                "testnet": config.get("testnet", False),
+                "price_limit": config.get("price_limit"),
+                "timestamp": datetime.now().isoformat()
+            }
+            log_scheduled_job(job_details)
+
             return task_id
 
     def cancel_order(self, task_id):

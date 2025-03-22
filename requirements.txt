@@ -1,0 +1,6 @@
+ccxt==4.4.69
+cryptography==44.0.2
+dash==3.0.0
+dash_bootstrap_components==2.0.0
+pytz==2024.2
+pytz==2025.1
