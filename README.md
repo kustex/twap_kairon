@@ -11,7 +11,7 @@ This project is a **TWAP (Time-Weighted Average Price)** trading engine with a b
 - 🔐 Encrypted API key storage using Fernet (AES-128)
 - 📊 Real-time Dash dashboard with:
   - Add Exchange panel
-  - Submitted Orders table
+  - Submitted Trades table
   - Scheduled Jobs table
   - Active Jobs monitor
 - 💾 Uses SQLite for persistent logging of jobs and executions
