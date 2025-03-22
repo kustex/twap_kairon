@@ -6,11 +6,13 @@ import os
 import pandas as pd
 import pytz
 
-from twap_engine import start_engine, scheduler
-from twap_engine.db import fetch_submitted_orders
+from twap_engine import launch_system, order_scheduler as scheduler
+from twap_engine.db import get_submitted_orders
+
 
 # ------------------- Initialization -------------------
-start_engine()
+launch_system()
+
 tz = pytz.timezone('Europe/Paris')
 EXCHANGES_FILE = "exchanges.json"
 DATA_DIR = "data"
@@ -33,6 +35,8 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
 
 app.layout = dbc.Container([
+    html.H2("TWAP Order Execution Dashboard", className="my-4 text-center"),
+
     dbc.Button("Add Exchange", id="open-sidebar", n_clicks=0, className="mb-3", color="info"),
 
     dbc.Offcanvas([
@@ -52,35 +56,37 @@ app.layout = dbc.Container([
 
     dbc.Row([
         dbc.Col([
-            html.H3("TWAP Parameters"),
+            html.H4("TWAP Strategy Parameters", className="mb-3"),
             dbc.Label("Select Exchange"),
             dcc.Dropdown(
                 id="exchange-dropdown",
-                options=[{"label": k, "value": k} for k in load_exchanges().keys()],
-                value=list(load_exchanges().keys())[0] if load_exchanges() else None
+                options=[{"label": k.upper(), "value": k} for k in load_exchanges().keys()],
+                value=list(load_exchanges().keys())[0] if load_exchanges() else None,
+                className="mb-2"
             ),
             dbc.Label("Trading Symbol"),
-            dbc.Input(id="symbol-input", type="text", value="BTC/USDT"),
+            dbc.Input(id="symbol-input", type="text", value="BTC/USDT", className="mb-2"),
             dbc.Label("Side"),
             dcc.Dropdown(
                 id="side-dropdown",
-                options=[{"label": "buy", "value": "buy"}, {"label": "sell", "value": "sell"}],
-                value="buy"
+                options=[{"label": "Buy", "value": "buy"}, {"label": "Sell", "value": "sell"}],
+                value="buy",
+                className="mb-2"
             ),
             dbc.Label("Total Size"),
-            dbc.Input(id="total-size", type="number", value=0.1),
+            dbc.Input(id="total-size", type="number", value=0.1, className="mb-2"),
             dbc.Label("Total Run Time (seconds)"),
-            dbc.Input(id="total-run-time", type="number", value=60),
+            dbc.Input(id="total-run-time", type="number", value=60, className="mb-2"),
             dbc.Label("Number of Trades"),
-            dbc.Input(id="number-of-trades", type="number", value=6),
+            dbc.Input(id="number-of-trades", type="number", value=6, className="mb-2"),
             dbc.Label("Price Limit (optional)"),
-            dbc.Input(id="price-limit", type="number", value=0.0),
-            dbc.Button("Start TWAP Execution", id="start-twap", color="primary", className="mt-3"),
-            html.Div(id="start-twap-output", className="mt-2")
+            dbc.Input(id="price-limit", type="number", value=0.0, className="mb-3"),
+            dbc.Button("Start TWAP Execution", id="start-twap", color="primary", className="mt-2"),
+            html.Div(id="start-twap-output", className="mt-3 text-success")
         ], width=4),
 
         dbc.Col([
-            html.H3("Submitted Trades"),
+            html.H4("Submitted Trades", className="mb-3"),
             dash_table.DataTable(
                 id="submitted-orders-table",
                 columns=[
@@ -97,10 +103,11 @@ app.layout = dbc.Container([
                 ],
                 data=[],
                 style_table={"overflowX": "auto"},
+                style_cell={"textAlign": "center"},
                 page_size=10
             ),
             html.Hr(),
-            html.H3("Active TWAP Jobs"),
+            html.H4("Active TWAP Jobs", className="mb-3"),
             dash_table.DataTable(
                 id="active-jobs-table",
                 columns=[
@@ -112,6 +119,7 @@ app.layout = dbc.Container([
                 ],
                 data=[],
                 style_table={"overflowX": "auto"},
+                style_cell={"textAlign": "center"},
                 page_size=10
             )
         ], width=8)
@@ -165,7 +173,7 @@ def save_exchange(n_clicks, name, api_key, api_secret, password, testnet):
         "testnet": testnet
     }
     save_exchanges(exchanges)
-    options = [{"label": k, "value": k} for k in exchanges.keys()]
+    options = [{"label": k.upper(), "value": k} for k in exchanges.keys()]
     return f"{name} saved successfully.", options
 
 @app.callback(
@@ -192,7 +200,7 @@ def start_twap(n_clicks, selected_exchange, symbol, side, total_size, total_run_
     interval = total_run_time / number_of_trades
     price_limit = price_limit if price_limit > 0 else None
 
-    scheduler.add_job({
+    scheduler.schedule_order({
         "exchange": selected_exchange,
         "api_key": creds["api_key"],
         "api_secret": creds["api_secret"],
@@ -213,23 +221,20 @@ def start_twap(n_clicks, selected_exchange, symbol, side, total_size, total_run_
     Input("orders-interval", "n_intervals")
 )
 def update_active_jobs(n):
-    return scheduler.get_active_jobs()
+    return scheduler.list_pending_orders()
 
 @app.callback(
     Output("submitted-orders-table", "data"),
     Input("orders-interval", "n_intervals")
 )
 def update_submitted_orders(n):
-    orders = fetch_submitted_orders()
+    orders = get_submitted_orders()
     for order in orders:
         tn = order.get("trade_number")
         nt = order.get("num_trades")
         if tn is not None and nt:
-            order["trade_number"] = f"{tn}/{nt}" 
+            order["trade_number"] = f"{tn}/{nt}"
     return orders
-
-
-
 
 if __name__ == "__main__":
     app.run(debug=True)

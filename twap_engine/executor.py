@@ -1,99 +1,96 @@
-# executor.py
 import threading
 import queue
 import logging
 import ccxt
 import datetime
-from .db import save_submitted_order
+from .db import log_submitted_order
 
 logging.basicConfig(level=logging.INFO)
 
-class TradeExecutor(threading.Thread):
-    def __init__(self, execution_queue, scheduler):
+class OrderExecutor(threading.Thread):
+    def __init__(self, order_queue, order_scheduler):
         super().__init__(daemon=True)
-        self.execution_queue = execution_queue
-        self.scheduler = scheduler
+        self.order_queue = order_queue
+        self.order_scheduler = order_scheduler
         self._stop_event = threading.Event()
 
     def run(self):
-        logging.info("[Executor] TradeExecutor thread started.")
+        logging.info("[Executor] OrderExecutor thread started.")
         while not self._stop_event.is_set():
             try:
-                job = self.execution_queue.get(timeout=1)
-                self.execute_trade(job)
-                self.execution_queue.task_done()
+                task = self.order_queue.get(timeout=1)
+                self.submit_order(task)
+                self.order_queue.task_done()
             except queue.Empty:
                 continue
             except Exception as e:
-                logging.error(f"[Executor] Error during execution loop: {e}")
-                job_id = job.get("id")
-                if job_id:
-                    self.scheduler.remove_job_by_id(job_id)
-                    logging.info(f"[Executor] Job {job_id} removed due to execution error.")
+                logging.error(f"[Executor] Error in processing loop: {e}")
+                order_id = task.get("id")
+                if order_id:
+                    self.order_scheduler.cancel_order(order_id)
+                    logging.info(f"[Executor] Order {order_id} cancelled due to error.")
 
-    def execute_trade(self, job):
-        exchange_name = job["exchange"]
-        api_key = job["api_key"]
-        api_secret = job["api_secret"]
-        password = job.get("password")
-        symbol = job["symbol"]
-        side = job["side"]
-        size = job["total_size"] / job["num_trades"]
-        testnet = bool(job.get("testnet", False))
-        price_limit = job.get("price_limit")
+    def submit_order(self, task):
+        exchange_name = task["exchange"]
+        api_key = task["api_key"]
+        api_secret = task["api_secret"]
+        password = task.get("password")
+        symbol = task["symbol"]
+        side = task["side"]
+        chunk_size = task["total_size"] / task["num_trades"]
+        test_mode = bool(task.get("testnet", False))
+        price_cap = task.get("price_limit")
 
         try:
             exchange_class = getattr(ccxt, exchange_name.lower())
-            params = {"apiKey": api_key, "secret": api_secret}
+            credentials = {"apiKey": api_key, "secret": api_secret}
             if password:
-                params["password"] = password
+                credentials["password"] = password
 
-            exchange = exchange_class(params)
-            if testnet and exchange_name.lower() == "bybit":
+            exchange = exchange_class(credentials)
+            if test_mode and exchange_name.lower() == "bybit":
                 exchange.set_sandbox_mode(True)
 
             ticker = exchange.fetch_ticker(symbol)
-            current_price = float(ticker["last"])
-            logging.info(f"[Executor] Market price for {symbol}: {current_price}")
+            current_market_price = float(ticker["last"])
+            logging.info(f"[Executor] Current price for {symbol}: {current_market_price}")
 
-            if price_limit is not None:
-                if side == "buy" and current_price > price_limit:
-                    raise Exception(f"Buy price {current_price} exceeds limit {price_limit}")
-                if side == "sell" and current_price < price_limit:
-                    raise Exception(f"Sell price {current_price} below limit {price_limit}")
+            if price_cap is not None:
+                if side == "buy" and current_market_price > price_cap:
+                    raise Exception(f"Buy limit exceeded: {current_market_price} > {price_cap}")
+                if side == "sell" and current_market_price < price_cap:
+                    raise Exception(f"Sell limit missed: {current_market_price} < {price_cap}")
 
-            executed = job.get("executed", 0)
-            trade_number = executed
-            submitted = {
+            step = task.get("executed", 0)
+            log = {
                 "timestamp": datetime.datetime.now().isoformat(),
                 "exchange": exchange_name,
                 "symbol": symbol,
-                "price_at_submit": current_price,
-                "size": size,
+                "price_at_submit": current_market_price,
+                "size": chunk_size,
                 "side": side,
                 "order_type": "market",
-                "job_id": job.get("id"),
-                "trade_number": trade_number,
-                "num_trades": job.get("num_trades")  # 👈 ADD THIS
-
+                "job_id": task.get("id"),
+                "trade_number": step,
+                "num_trades": task.get("num_trades")
             }
-            save_submitted_order(submitted)
+            log_submitted_order(log)
 
             if side == "buy":
-                params["createMarketBuyOrderRequiresPrice"] = True
-                order = exchange.create_order(symbol, 'market', side, size, current_price, params)
+                credentials["createMarketBuyOrderRequiresPrice"] = True
+                order_response = exchange.create_order(symbol, 'market', side, chunk_size, current_market_price, credentials)
             else:
-                order = exchange.create_order(symbol, 'market', side, size, None, params)
+                order_response = exchange.create_order(symbol, 'market', side, chunk_size, None, credentials)
 
-            logging.info(f"[Executor] Trade executed: {order}")
+            logging.info(f"[Executor] Order executed: {order_response}")
 
         except Exception as e:
-            logging.error(f"[Executor] Error executing trade: {e}")
-            job_id = job.get("id")
-            if job_id:
-                self.scheduler.remove_job_by_id(job_id)
-                logging.info(f"[Executor] Job {job_id} removed due to execution error.")
+            logging.error(f"[Executor] Order error: {e}")
+            order_id = task.get("id")
+            if order_id:
+                self.order_scheduler.cancel_order(order_id)
+                logging.info(f"[Executor] Order {order_id} cancelled due to error.")
 
     def stop(self):
         self._stop_event.set()
-        logging.info("[Executor] TradeExecutor thread stopped.")
+        logging.info("[Executor] OrderExecutor thread stopped.")

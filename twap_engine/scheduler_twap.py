@@ -1,4 +1,3 @@
-# scheduler_twap.py
 import threading
 import time
 from datetime import datetime, timedelta
@@ -7,86 +6,86 @@ import uuid
 
 logging.basicConfig(level=logging.INFO)
 
-class InMemoryTWAPJob:
-    def __init__(self, job_id, job_data):
-        self.id = job_id
-        self.job = job_data
-        self.executed = 0
-        self.next_exec = datetime.now()
+class ScheduledTWAPTask:
+    def __init__(self, task_id, task_data):
+        self.id = task_id
+        self.details = task_data
+        self.completed = 0
+        self.next_trigger = datetime.now()
 
-    def is_due(self):
-        return datetime.now() >= self.next_exec
+    def is_ready(self):
+        return datetime.now() >= self.next_trigger
 
-    def advance(self):
-        self.executed += 1
-        self.next_exec += timedelta(seconds=self.job["delay_seconds"])
-        return self.executed >= self.job["num_trades"]
+    def mark_progress(self):
+        self.completed += 1
+        self.next_trigger += timedelta(seconds=self.details["delay_seconds"])
+        return self.completed >= self.details["num_trades"]
 
-class TWAPScheduler:
-    def __init__(self, execution_queue, interval_seconds=1):
-        self.execution_queue = execution_queue
-        self.interval_seconds = interval_seconds
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self.jobs = []
-        self.job_counter = 1
-        self._lock = threading.Lock()
+
+class OrderScheduler:
+    def __init__(self, queue, interval=1):
+        self.queue = queue
+        self.interval = interval
+        self._shutdown = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._tasks = []
+        self._id_lock = threading.Lock()
 
     def start(self):
-        logging.info("[SCHEDULER] Starting scheduler thread...")
+        logging.info("[Scheduler] OrderScheduler thread running...")
         self._thread.start()
 
     def stop(self):
-        self._stop_event.set()
+        self._shutdown.set()
         self._thread.join()
-        logging.info("[SCHEDULER] Scheduler thread stopped.")
+        logging.info("[Scheduler] OrderScheduler stopped.")
 
-    def add_job(self, job_data):
-        with self._lock:
-            job_id = str(uuid.uuid4())  # Unique ID
-            new_job = InMemoryTWAPJob(job_id, job_data)
-            self.jobs.append(new_job)
-            logging.info(f"[SCHEDULER] Job {job_id} added: {job_data}")
-            return job_id
+    def schedule_order(self, config):
+        with self._id_lock:
+            task_id = str(uuid.uuid4())
+            task = ScheduledTWAPTask(task_id, config)
+            self._tasks.append(task)
+            logging.info(f"[Scheduler] Scheduled {task_id}: {config}")
+            return task_id
 
-    def remove_job_by_id(self, job_id):
-        with self._lock:
-            before = len(self.jobs)
-            self.jobs = [job for job in self.jobs if job.id != job_id]
-            after = len(self.jobs)
-            logging.info(f"[SCHEDULER] Job {job_id} removed due to error. {before} → {after} jobs.")
+    def cancel_order(self, task_id):
+        with self._id_lock:
+            before = len(self._tasks)
+            self._tasks = [t for t in self._tasks if t.id != task_id]
+            after = len(self._tasks)
+            logging.info(f"[Scheduler] Cancelled {task_id}. Queue size: {before} → {after}")
 
-    def _run_loop(self):
-        while not self._stop_event.is_set():
+    def _run(self):
+        while not self._shutdown.is_set():
             try:
-                with self._lock:
-                    for job in list(self.jobs):
-                        if job.is_due():
-                            finished = job.advance()
-                            
-                            job_dict = job.job.copy()
-                            job_dict["id"] = job.id
-                            job_dict["executed"] = job.executed
-                            job_dict["next_exec"] = job.next_exec.isoformat()
+                with self._id_lock:
+                    for task in list(self._tasks):
+                        if task.is_ready():
+                            done = task.mark_progress()
 
-                            logging.info(f"[SCHEDULER] Dispatching job {job.id} (trade {job_dict['executed']}/{job.job['num_trades']}) to executor")
-                            self.execution_queue.put(job_dict)
+                            payload = task.details.copy()
+                            payload["id"] = task.id
+                            payload["executed"] = task.completed
+                            payload["next_exec"] = task.next_trigger.isoformat()
 
-                            if finished:
-                                self.jobs.remove(job)
-                                logging.info(f"[SCHEDULER] Job {job.id} complete and removed from memory.")
+                            logging.info(f"[Scheduler] Dispatching {task.id} (step {task.completed}/{task.details['num_trades']})")
+                            self.queue.put(payload)
 
-            except Exception as e:
-                logging.error(f"[SCHEDULER] Error in loop: {e}")
+                            if done:
+                                self._tasks.remove(task)
+                                logging.info(f"[Scheduler] Task {task.id} completed.")
+            except Exception as err:
+                logging.error(f"[Scheduler] Error: {err}")
 
-            time.sleep(self.interval_seconds)
+            time.sleep(self.interval)
 
-    def get_active_jobs(self):
-        with self._lock:
+    def list_pending_orders(self):
+        with self._id_lock:
             return [{
-                "exchange": job.job["exchange"],
-                "symbol": job.job["symbol"],
-                "side": job.job["side"],
-                "remaining_trades": job.job["num_trades"] - job.executed,
-                "next_exec": job.next_exec.isoformat()
-            } for job in self.jobs]
+                "exchange": t.details["exchange"],
+                "symbol": t.details["symbol"],
+                "side": t.details["side"],
+                "remaining_trades": t.details["num_trades"] - t.completed,
+                "next_exec": t.next_trigger.isoformat(),
+                "job_id": t.id
+            } for t in self._tasks]

@@ -1,22 +1,18 @@
-# __init__.py
-from .scheduler_twap import TWAPScheduler
-from .db import init_db
+from .scheduler_twap import OrderScheduler
+from .executor import OrderExecutor
+from .db import init_storage
 import queue
 
-init_db()
+# Initialize database schema
+init_storage()
 
-# Shared execution queue between scheduler and executor
-execution_queue = queue.Queue()
+# Shared queue for order tasks
+order_queue = queue.Queue()
 
-# Instantiate scheduler FIRST
-scheduler = TWAPScheduler(execution_queue=execution_queue)
+# Instantiate scheduler and executor with shared state
+order_scheduler = OrderScheduler(queue=order_queue)
+order_executor = OrderExecutor(order_queue=order_queue, order_scheduler=order_scheduler)
 
-# ✅ Import executor AFTER scheduler to avoid circular import
-from .executor import TradeExecutor
-
-# Now pass scheduler into the executor
-executor = TradeExecutor(execution_queue=execution_queue, scheduler=scheduler)
-
-def start_engine():
-    scheduler.start()
-    executor.start()
+def launch_system():
+    order_scheduler.start()
+    order_executor.start()
